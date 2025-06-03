@@ -19,6 +19,8 @@
 
 __attribute__((__section__(".fw_filter_config"))) fw_filter_config_t filter_config;
 
+__attribute__((__section__(".fw_tcp_filter_config"))) fw_tcp_filter_config_t tcp_config;
+
 __attribute__((__section__(".net_client_config"))) net_client_config_t net_config;
 
 /* Queues for receiving and transmitting packets */
@@ -51,8 +53,7 @@ typedef struct
   uint32_t last_ack_seq;
 } tcp_conn_state_t;
 
-#define TCP_CONN_TRACK_CAPACITY 128 // Tune as needed
-static tcp_conn_state_t tcp_conn_table[TCP_CONN_TRACK_CAPACITY];
+static tcp_conn_state_t *tcp_conn_table;
 
 void filter(void)
 {
@@ -100,7 +101,7 @@ void filter(void)
         uint32_t ack_seq = tcp_hdr->ack_seq;
 
         tcp_conn_state_t *conn = NULL;
-        for (int i = 0; i < TCP_CONN_TRACK_CAPACITY; i++)
+        for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
         {
           if (tcp_conn_table[i].valid &&
               tcp_conn_table[i].src_ip == ip_pkt->src_ip &&
@@ -125,7 +126,7 @@ void filter(void)
         if (conn == NULL && syn && !ack)
         {
           // New SYN
-          for (int i = 0; i < TCP_CONN_TRACK_CAPACITY; i++)
+          for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
           {
             if (!tcp_conn_table[i].valid)
             {

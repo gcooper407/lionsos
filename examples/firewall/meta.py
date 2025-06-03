@@ -53,6 +53,9 @@ filter_rule_region_size = round_up_to_Page(filter_rule_capacity * 28)
 instances_capacity = 512
 instances_region_size = round_up_to_Page(instances_capacity * 20)
 
+tcp_filter_capacity = 512
+tcp_filter_region_size = round_up_to_Page(tcp_filter_capacity * 28)
+
 ext_net = 0
 int_net = 1
 
@@ -538,6 +541,24 @@ def generate(sdf_file: str, output_dir: str, dtb: DeviceTree, iotgate_idx: int):
         networks[int_net]["configs"][filter_pd].external_instances = ext_instances[1]
         networks[ext_net]["configs"][mirror_filter].internal_instances = ext_instances[0]
         networks[ext_net]["configs"][mirror_filter].external_instances = int_instances[1]
+        
+        if protocol == 0x06:
+            # Create TCP filter connections reigons
+            int_tcp_conns = fw_shared_region(filter_pd, mirror_filter, "rw", "rw", "tcp_conns", tcp_filter_region_size)
+            ext_tcp_conns = fw_shared_region(mirror_filter, filter_pd, "rw", "rw", "tcp_conns", tcp_filter_region_size)
+            
+            networks[int_net]["configs"]["tcp_filter"] = FwTcpFilterConfig(
+                int_tcp_conns[0],
+                ext_tcp_conns[1],
+                tcp_filter_capacity
+            )
+
+            networks[ext_net]["configs"]["tcp_filter"] = FwTcpFilterConfig(
+                ext_tcp_conns[0],
+                int_tcp_conns[1],
+                tcp_filter_capacity
+            )
+
 
     assert serial_system.connect()
     assert serial_system.serialise_config(output_dir)
@@ -547,11 +568,18 @@ def generate(sdf_file: str, output_dir: str, dtb: DeviceTree, iotgate_idx: int):
     for network in networks:
         for pd, config in network["configs"].items():
 
+            if pd == "tcp_filter":
+                data_path = network["out_dir"] + "/firewall_config_" + "tcp_filter_conns" + ".data"
+                with open(data_path, "wb+") as f:
+                    f.write(config.serialise())
+                update_elf_section(obj_copy, f"tcp_filter{network["num"]}.elf", config.section_name, data_path)
+                continue
+            
             data_path = network["out_dir"] + "/firewall_config_" + pd.name + ".data"
             with open(data_path, "wb+") as f:
                 f.write(config.serialise())
             update_elf_section(obj_copy, pd.elf, config.section_name, data_path)
-
+            
     data_path = output_dir + "/firewall_config_webserver.data"
     with open(data_path, "wb+") as f:
         f.write(webserver_config.serialise())

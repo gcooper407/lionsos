@@ -101,6 +101,12 @@ typedef struct fw_filter_config {
     region_resource_t external_instances;
 } fw_filter_config_t;
 
+typedef struct fw_tcp_filter_config {
+    region_resource_t internal_tcp_conns;
+    region_resource_t external_tcp_conns;
+    uint16_t tcp_conns_capacity;
+} fw_tcp_filter_config_t;
+
 typedef struct fw_webserver_interface_config {
     uint8_t mac_addr[ETH_HWADDR_LEN];
     uint32_t ip;
