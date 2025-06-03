@@ -15,7 +15,7 @@
 #define FW_NUM_ARP_REQUESTER_CLIENTS 2
 #define FW_NUM_INTERFACES 2
 
-#define FW_DEBUG_OUTPUT 1
+#define FW_DEBUG_OUTPUT 0
 
 typedef struct fw_connection_resource {
     region_resource_t queue;
