@@ -51,7 +51,7 @@ typedef struct
   uint32_t last_ack_seq;
 } tcp_conn_state_t;
 
-#define TCP_CONN_TRACK_CAPACITY 128 // Tune as needed
+#define TCP_CONN_TRACK_CAPACITY 128
 static tcp_conn_state_t tcp_conn_src[TCP_CONN_TRACK_CAPACITY];
 static tcp_conn_state_t tcp_conn_dst[TCP_CONN_TRACK_CAPACITY];
 
@@ -161,7 +161,7 @@ void filter(void)
           }
         }
         // Sending SYN-ACK
-        else if (conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
+        else if (conn_src == NULL && conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
         {
           // SYN-ACK response
           conn_src->state = TCP_STATE_SYN_ACK_RECEIVED;
