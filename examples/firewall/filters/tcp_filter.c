@@ -77,6 +77,11 @@ void filter(void)
 
       bool default_action = false;
       uint8_t rule_id = 0;
+      // COURTNEY: One thing to talk about later is this function searches through the other filter's instances,
+      // and if there is a match it will return FILTER_ACT_ESTABLISHED. If this filter sees a tcp fin, we need to somehow
+      // remove that connection from the other filter's instances. But we can talk about this later.
+      // COURTNEY: Another thing is you may want to also look through THIS filter's instances, as if there is already an
+      // established connection maybe you don't want to add to your TCP connection table
       fw_action_t action = fw_filter_find_action(&filter_state, ip_pkt->src_ip, tcp_hdr->src_port,
                                                  ip_pkt->dst_ip, tcp_hdr->dst_port, &rule_id);
 
@@ -147,6 +152,8 @@ void filter(void)
 
         if (conn_src && conn_dst && (fin || tcp_hdr->rst))
         {
+          // COURTNEY: This is good, but in the future we may also want to remove from instances here? I realised
+          // there is still some additional unhandled complexities with the instances table we need to talk about
           conn_src->valid = false; // Remove tracking entry
           conn_dst->valid = false; // Remove tracking entry
           sddf_printf("TCP connection closed for (ip %s, port %u) -> (ip %s, port %u)\n",
@@ -179,18 +186,26 @@ void filter(void)
         else if (conn_src == NULL && conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
         {
           // SYN-ACK response
+          // COURTNEY: Remember conn_src is NULL ^^, so this will be dereferencing a NULL pointer and cause a crash.
           conn_src->state = TCP_STATE_SYN_ACK_RECEIVED;
+          // COURTNEY: This line is what you want!
           conn_dst->state = TCP_STATE_SYN_ACK_RECEIVED;
 
+          // COURTNEY: Same as above
           conn_src->last_ack_seq = ack_seq;
+          // COURTNEY: This is what you want
           conn_dst->last_ack_seq = ack_seq;
+          // COURTNEY: Change this print to conn_dst
           sddf_printf("TCP SYN-ACK seen: (%s:%u -> %s:%u) [State updated to SYN_ACK_RECEIVED]\n",
                       ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
                       ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
         }
+        // COURTNEY: If this is the final ack, then the connection entry should be in conn_src, and not conn_dst. The other filter
+        // would have just modified conn_src, and not created a new connection in it's table. So conn_dst would be NULL here
         else if (conn_src && conn_dst && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
         {
           // Final ACK
+          // COURTNEY: You could confirm it's final by looking at the sequence number as well
           conn_src->state = TCP_STATE_ESTABLISHED;
           // Now add instance
           fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
