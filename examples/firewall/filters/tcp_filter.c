@@ -55,8 +55,12 @@ typedef struct
 
 // static tcp_conn_state_t *tcp_conn_table;
 
-static tcp_conn_state_t *tcp_conn_table_src = &tcp_config.internal_tcp_conns.vaddr;
-static tcp_conn_state_t *tcp_conn_table_dst = &tcp_config.external_tcp_conns.vaddr;
+// static tcp_conn_state_t *tcp_conn_table_src = &tcp_config.internal_tcp_conns.vaddr;
+// static tcp_conn_state_t *tcp_conn_table_dst = &tcp_config.external_tcp_conns.vaddr;
+// static tcp_conn_state_t *tcp_conn_table_src = (tcp_conn_state_t *)tcp_config.internal_tcp_conns.vaddr;
+// static tcp_conn_state_t *tcp_conn_table_dst = (tcp_conn_state_t *)tcp_config.external_tcp_conns.vaddr;
+static tcp_conn_state_t *tcp_conn_table_src;
+static tcp_conn_state_t *tcp_conn_table_dst;
 
 void filter(void)
 {
@@ -183,26 +187,17 @@ void filter(void)
             }
           }
         }
-        else if (conn_src == NULL && conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
+        else if (conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
         {
           // SYN-ACK response
-          // COURTNEY: Remember conn_src is NULL ^^, so this will be dereferencing a NULL pointer and cause a crash.
-          conn_src->state = TCP_STATE_SYN_ACK_RECEIVED;
-          // COURTNEY: This line is what you want!
           conn_dst->state = TCP_STATE_SYN_ACK_RECEIVED;
-
-          // COURTNEY: Same as above
-          conn_src->last_ack_seq = ack_seq;
-          // COURTNEY: This is what you want
           conn_dst->last_ack_seq = ack_seq;
-          // COURTNEY: Change this print to conn_dst
+
           sddf_printf("TCP SYN-ACK seen: (%s:%u -> %s:%u) [State updated to SYN_ACK_RECEIVED]\n",
-                      ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                      ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
+                      ipaddr_to_string(conn_dst->dst_ip, ip_addr_buf0), conn_dst->dst_port,
+                      ipaddr_to_string(conn_dst->src_ip, ip_addr_buf1), conn_dst->src_port);
         }
-        // COURTNEY: If this is the final ack, then the connection entry should be in conn_src, and not conn_dst. The other filter
-        // would have just modified conn_src, and not created a new connection in it's table. So conn_dst would be NULL here
-        else if (conn_src && conn_dst && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
+        else if (conn_src && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
         {
           // Final ACK
           // COURTNEY: You could confirm it's final by looking at the sequence number as well
@@ -391,4 +386,7 @@ void init(void)
   fw_filter_state_init(&filter_state, filter_config.webserver.rules.vaddr, filter_config.webserver.rules_capacity,
                        filter_config.internal_instances.vaddr, filter_config.external_instances.vaddr, filter_config.instances_capacity,
                        (fw_action_t)filter_config.webserver.default_action);
+
+  tcp_conn_table_src = (tcp_conn_state_t *)tcp_config.internal_tcp_conns.vaddr;
+  tcp_conn_table_dst = (tcp_conn_state_t *)tcp_config.external_tcp_conns.vaddr;
 }
