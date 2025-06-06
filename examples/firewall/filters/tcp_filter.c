@@ -29,6 +29,7 @@ net_queue_handle_t tx_queue;
 fw_queue_handle_t router_queue;
 
 #define FW_DEBUG_OUTPUT 1
+#define MAX_OPEN_SYNS_PER_IP 5
 
 /* Holds filFering rules and state */
 fw_filter_state_t filter_state;
@@ -55,6 +56,21 @@ typedef struct
 
 static tcp_conn_state_t *tcp_conn_table_src;
 static tcp_conn_state_t *tcp_conn_table_dst;
+
+static int count_open_syns(uint32_t src_ip)
+{
+  int count = 0;
+  for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
+  {
+    if (tcp_conn_table_src[i].valid &&
+        tcp_conn_table_src[i].src_ip == src_ip &&
+        tcp_conn_table_src[i].state == TCP_STATE_SYN_SENT)
+    {
+      count++;
+    }
+  }
+  return count;
+}
 
 void filter(void)
 {
@@ -138,15 +154,76 @@ void filter(void)
         {
           // COURTNEY: This is good, but in the future we may also want to remove from instances here? I realised
           // there is still some additional unhandled complexities with the instances table we need to talk about
+
+          // Not sure if this in-built function works like this, keeping it just in case
+          //   fw_filter_remove_instances(&filter_state,
+          //                     conn_src->default_rule,
+          //                     conn_src->rule_id);
+
+          // These loops that Joji wrote seem more exact/precise
+          for (int i = 0; i < filter_state.instances_capacity; i++)
+          {
+            fw_instance_t *inst = &filter_state.internal_instances[i];
+            if (inst->valid &&
+                inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
+                inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
+            {
+              inst->valid = false;
+              break;
+            }
+          }
+
+          for (int i = 0; i < filter_state.instances_capacity; i++)
+          {
+            fw_instance_t *inst = &filter_state.external_instances[i];
+            if (inst->valid &&
+                inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
+                inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
+            {
+              inst->valid = false;
+              break;
+            }
+          }
+
           conn_src->valid = false; // Remove tracking entry
           sddf_printf("TCP connection closed for (ip %s, port %u) -> (ip %s, port %u)\n",
                       ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
                       ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
         }
 
-        // Handle state transitions
-        if ((conn_src == NULL && syn && !ack) || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT))
+        // SYN
+        if (syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
         {
+          int open_syns = count_open_syns(ip_pkt->src_ip);
+          if (open_syns >= MAX_OPEN_SYNS_PER_IP)
+          {
+            // MAYBE: Reclaim a stale SYN_SENT entry?
+            // for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
+            // {
+            //   tcp_conn_state_t *entry = &tcp_conn_table_src[i];
+            //   if (entry->valid &&
+            //       entry->src_ip == ip_pkt->src_ip &&
+            //       entry->state == TCP_STATE_SYN_SENT)
+            //   {
+            //     sddf_printf("Dropping old SYN_SENT entry for %s:%u -> %s:%u\n",
+            //                 ipaddr_to_string(entry->src_ip, ip_addr_buf0), entry->src_port,
+            //                 ipaddr_to_string(entry->dst_ip, ip_addr_buf1), entry->dst_port);
+            //     entry->valid = false;
+            //     break;
+            //   }
+            // }
+
+            sddf_printf("SYN flood protection triggered: dropping new SYN from %s:%u -> %s:%u (count = %d)\n",
+                        ipaddr_to_string(ip_pkt->src_ip, ip_addr_buf0), tcp_hdr->src_port,
+                        ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port,
+                        open_syns);
+
+            err = net_enqueue_free(&rx_queue, buffer);
+            assert(!err);
+            returned = true;
+            continue;
+          }
+
           // New SYN
           for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
           {
@@ -166,6 +243,7 @@ void filter(void)
             }
           }
         }
+        // SYN-ACK
         else if (conn_dst && syn && ack && (conn_dst->state == TCP_STATE_SYN_SENT || conn_dst->state == TCP_STATE_SYN_ACK_RECEIVED))
         {
           // SYN-ACK response
@@ -176,6 +254,7 @@ void filter(void)
                       ipaddr_to_string(conn_dst->dst_ip, ip_addr_buf0), conn_dst->dst_port,
                       ipaddr_to_string(conn_dst->src_ip, ip_addr_buf1), conn_dst->src_port);
         }
+        // ACK
         else if (conn_src && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
         {
           // Final ACK
