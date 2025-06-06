@@ -53,12 +53,6 @@ typedef struct
   uint32_t last_ack_seq;
 } tcp_conn_state_t;
 
-// static tcp_conn_state_t *tcp_conn_table;
-
-// static tcp_conn_state_t *tcp_conn_table_src = &tcp_config.internal_tcp_conns.vaddr;
-// static tcp_conn_state_t *tcp_conn_table_dst = &tcp_config.external_tcp_conns.vaddr;
-// static tcp_conn_state_t *tcp_conn_table_src = (tcp_conn_state_t *)tcp_config.internal_tcp_conns.vaddr;
-// static tcp_conn_state_t *tcp_conn_table_dst = (tcp_conn_state_t *)tcp_config.external_tcp_conns.vaddr;
 static tcp_conn_state_t *tcp_conn_table_src;
 static tcp_conn_state_t *tcp_conn_table_dst;
 
@@ -111,20 +105,6 @@ void filter(void)
         bool fin = tcp_hdr->fin;
         uint32_t seq = tcp_hdr->seq;
         uint32_t ack_seq = tcp_hdr->ack_seq;
-
-        // tcp_conn_state_t *conn = NULL;
-        // for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
-        // {
-        //   if (tcp_conn_table[i].valid &&
-        //       tcp_conn_table[i].src_ip == ip_pkt->src_ip &&
-        //       tcp_conn_table[i].src_port == tcp_hdr->src_port &&
-        //       tcp_conn_table[i].dst_ip == ip_pkt->dst_ip &&
-        //       tcp_conn_table[i].dst_port == tcp_hdr->dst_port)
-        //   {
-        //     conn = &tcp_conn_table[i];
-        //     break;
-        //   }
-        // }
 
         tcp_conn_state_t *conn_src = NULL;
         tcp_conn_state_t *conn_dst = NULL;
