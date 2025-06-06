@@ -154,19 +154,18 @@ void filter(void)
           }
         }
 
-        if (conn_src && conn_dst && (fin || tcp_hdr->rst))
+        if (conn_src && (fin || tcp_hdr->rst))
         {
           // COURTNEY: This is good, but in the future we may also want to remove from instances here? I realised
           // there is still some additional unhandled complexities with the instances table we need to talk about
           conn_src->valid = false; // Remove tracking entry
-          conn_dst->valid = false; // Remove tracking entry
           sddf_printf("TCP connection closed for (ip %s, port %u) -> (ip %s, port %u)\n",
                       ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
                       ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
         }
 
         // Handle state transitions
-        if (conn_src == NULL && conn_dst == NULL && syn && !ack)
+        if ((conn_src == NULL && syn && !ack) || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT))
         {
           // New SYN
           for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
@@ -187,7 +186,7 @@ void filter(void)
             }
           }
         }
-        else if (conn_dst && syn && ack && conn_dst->state == TCP_STATE_SYN_SENT)
+        else if (conn_dst && syn && ack && (conn_dst->state == TCP_STATE_SYN_SENT || conn_dst->state == TCP_STATE_SYN_ACK_RECEIVED))
         {
           // SYN-ACK response
           conn_dst->state = TCP_STATE_SYN_ACK_RECEIVED;
@@ -200,8 +199,13 @@ void filter(void)
         else if (conn_src && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
         {
           // Final ACK
+          sddf_printf("TCP ACK seen: (%s:%u -> %s:%u) [Handshake complete]\n",
+                      ipaddr_to_string(ip_pkt->src_ip, ip_addr_buf0), tcp_hdr->src_port,
+                      ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port);
+
           // COURTNEY: You could confirm it's final by looking at the sequence number as well
           conn_src->state = TCP_STATE_ESTABLISHED;
+          conn_src->valid = false;
           // Now add instance
           fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
                                                           conn_src->dst_ip, conn_src->dst_port, false, rule_id);
@@ -385,7 +389,7 @@ void init(void)
 
   fw_filter_state_init(&filter_state, filter_config.webserver.rules.vaddr, filter_config.webserver.rules_capacity,
                        filter_config.internal_instances.vaddr, filter_config.external_instances.vaddr, filter_config.instances_capacity,
-                       (fw_action_t)filter_config.webserver.default_action);
+                       FILTER_ACT_CONNECT);
 
   tcp_conn_table_src = (tcp_conn_state_t *)tcp_config.internal_tcp_conns.vaddr;
   tcp_conn_table_dst = (tcp_conn_state_t *)tcp_config.external_tcp_conns.vaddr;
