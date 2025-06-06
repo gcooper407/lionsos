@@ -91,7 +91,15 @@ void filter(void)
 
       /* First check if this is a SYN-ACK from a dst connection */
       tcp_conn_state_t *conn_dst = NULL;
-      if (tcp_hdr->syn && tcp_hdr->ack) {
+
+      bool syn = tcp_hdr->syn;
+      bool ack = tcp_hdr->ack;
+      bool fin = tcp_hdr->fin;
+      uint32_t seq = tcp_hdr->seq;
+      uint32_t ack_seq = tcp_hdr->ack_seq;
+
+      if (syn && ack)
+      {
 
         for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
         {
@@ -115,7 +123,7 @@ void filter(void)
           sddf_printf("TCP SYN-ACK seen: (%s:%u -> %s:%u) [State updated to SYN_ACK_RECEIVED]\n",
                       ipaddr_to_string(conn_dst->dst_ip, ip_addr_buf0), conn_dst->dst_port,
                       ipaddr_to_string(conn_dst->src_ip, ip_addr_buf1), conn_dst->src_port);
-          
+
           /* Reset the checksum as it's recalculated in hardware */
           tcp_hdr->check = 0;
 
@@ -123,8 +131,9 @@ void filter(void)
           assert(!err);
           transmitted = true;
           continue;
-
-        } else {
+        }
+        else
+        {
           /* No established TCP connection, drop packet */
           sddf_printf("TCP SYN-ACK seen without connection, dropping packet!\n");
           err = net_enqueue_free(&rx_queue, buffer);
@@ -161,12 +170,6 @@ void filter(void)
       /* Add an established connection in shared memory for corresponding filter */
       if (action == FILTER_ACT_CONNECT || action == FILTER_ACT_ESTABLISHED)
       {
-        bool syn = tcp_hdr->syn;
-        bool ack = tcp_hdr->ack;
-        bool fin = tcp_hdr->fin;
-        uint32_t seq = tcp_hdr->seq;
-        uint32_t ack_seq = tcp_hdr->ack_seq;
-
         tcp_conn_state_t *conn_src = NULL;
         for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
         {
@@ -223,7 +226,7 @@ void filter(void)
         // }
 
         // SYN
-        if (FILTER_ACT_CONNECT && syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
+        if (action == FILTER_ACT_CONNECT && syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
         {
           int open_syns = count_open_syns(ip_pkt->src_ip);
           if (open_syns >= MAX_OPEN_SYNS_PER_IP)
@@ -307,7 +310,9 @@ void filter(void)
                           ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port, fw_filter_err_str[fw_err]);
             }
           }
-        } else {
+        }
+        else
+        {
           sddf_printf("Attempted SYN retry or rogue ACK, dropping packet!\n");
           err = net_enqueue_free(&rx_queue, buffer);
           assert(!err);
