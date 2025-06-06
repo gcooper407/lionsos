@@ -89,6 +89,51 @@ void filter(void)
       ipv4_packet_t *ip_pkt = (ipv4_packet_t *)pkt_vaddr;
       tcphdr_t *tcp_hdr = (tcphdr_t *)(pkt_vaddr + transport_layer_offset(ip_pkt));
 
+      /* First check if this is a SYN-ACK from a dst connection */
+      tcp_conn_state_t *conn_dst = NULL;
+      if (tcp_hdr->syn && tcp_hdr->ack) {
+
+        for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
+        {
+          if (tcp_conn_table_dst[i].valid &&
+              tcp_conn_table_dst[i].src_ip == ip_pkt->dst_ip &&
+              tcp_conn_table_dst[i].src_port == tcp_hdr->dst_port &&
+              tcp_conn_table_dst[i].dst_ip == ip_pkt->src_ip &&
+              tcp_conn_table_dst[i].dst_port == tcp_hdr->src_port)
+          {
+            conn_dst = &tcp_conn_table_dst[i];
+            break;
+          }
+        }
+
+        if (conn_dst && (conn_dst->state == TCP_STATE_SYN_SENT || conn_dst->state == TCP_STATE_SYN_ACK_RECEIVED))
+        {
+          // SYN-ACK response
+          conn_dst->state = TCP_STATE_SYN_ACK_RECEIVED;
+          conn_dst->last_ack_seq = ack_seq;
+
+          sddf_printf("TCP SYN-ACK seen: (%s:%u -> %s:%u) [State updated to SYN_ACK_RECEIVED]\n",
+                      ipaddr_to_string(conn_dst->dst_ip, ip_addr_buf0), conn_dst->dst_port,
+                      ipaddr_to_string(conn_dst->src_ip, ip_addr_buf1), conn_dst->src_port);
+          
+          /* Reset the checksum as it's recalculated in hardware */
+          tcp_hdr->check = 0;
+
+          err = fw_enqueue(&router_queue, net_fw_desc(buffer));
+          assert(!err);
+          transmitted = true;
+          continue;
+
+        } else {
+          /* No established TCP connection, drop packet */
+          sddf_printf("TCP SYN-ACK seen without connection, dropping packet!\n");
+          err = net_enqueue_free(&rx_queue, buffer);
+          assert(!err);
+          returned = true;
+          continue;
+        }
+      }
+
       bool default_action = false;
       uint8_t rule_id = 0;
       // COURTNEY: One thing to talk about later is this function searches through the other filter's instances,
@@ -114,7 +159,7 @@ void filter(void)
       }
 
       /* Add an established connection in shared memory for corresponding filter */
-      if (action == FILTER_ACT_CONNECT)
+      if (action == FILTER_ACT_CONNECT || action == FILTER_ACT_ESTABLISHED)
       {
         bool syn = tcp_hdr->syn;
         bool ack = tcp_hdr->ack;
@@ -123,7 +168,6 @@ void filter(void)
         uint32_t ack_seq = tcp_hdr->ack_seq;
 
         tcp_conn_state_t *conn_src = NULL;
-        tcp_conn_state_t *conn_dst = NULL;
         for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
         {
           if (tcp_conn_table_src[i].valid &&
@@ -137,62 +181,49 @@ void filter(void)
           }
         }
 
-        for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
-        {
-          if (tcp_conn_table_dst[i].valid &&
-              tcp_conn_table_dst[i].src_ip == ip_pkt->dst_ip &&
-              tcp_conn_table_dst[i].src_port == tcp_hdr->dst_port &&
-              tcp_conn_table_dst[i].dst_ip == ip_pkt->src_ip &&
-              tcp_conn_table_dst[i].dst_port == tcp_hdr->src_port)
-          {
-            conn_dst = &tcp_conn_table_dst[i];
-            break;
-          }
-        }
+        // if (conn_src && (fin || tcp_hdr->rst))
+        // {
+        //   // COURTNEY: This is good, but in the future we may also want to remove from instances here? I realised
+        //   // there is still some additional unhandled complexities with the instances table we need to talk about
 
-        if (conn_src && (fin || tcp_hdr->rst))
-        {
-          // COURTNEY: This is good, but in the future we may also want to remove from instances here? I realised
-          // there is still some additional unhandled complexities with the instances table we need to talk about
+        //   // Not sure if this in-built function works like this, keeping it just in case
+        //   //   fw_filter_remove_instances(&filter_state,
+        //   //                     conn_src->default_rule,
+        //   //                     conn_src->rule_id);
 
-          // Not sure if this in-built function works like this, keeping it just in case
-          //   fw_filter_remove_instances(&filter_state,
-          //                     conn_src->default_rule,
-          //                     conn_src->rule_id);
+        //   // These loops that Joji wrote seem more exact/precise
+        //   for (int i = 0; i < filter_state.instances_capacity; i++)
+        //   {
+        //     fw_instance_t *inst = &filter_state.internal_instances[i];
+        //     if (inst->valid &&
+        //         inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
+        //         inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
+        //     {
+        //       inst->valid = false;
+        //       break;
+        //     }
+        //   }
 
-          // These loops that Joji wrote seem more exact/precise
-          for (int i = 0; i < filter_state.instances_capacity; i++)
-          {
-            fw_instance_t *inst = &filter_state.internal_instances[i];
-            if (inst->valid &&
-                inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
-                inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
-            {
-              inst->valid = false;
-              break;
-            }
-          }
+        //   for (int i = 0; i < filter_state.instances_capacity; i++)
+        //   {
+        //     fw_instance_t *inst = &filter_state.external_instances[i];
+        //     if (inst->valid &&
+        //         inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
+        //         inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
+        //     {
+        //       inst->valid = false;
+        //       break;
+        //     }
+        //   }
 
-          for (int i = 0; i < filter_state.instances_capacity; i++)
-          {
-            fw_instance_t *inst = &filter_state.external_instances[i];
-            if (inst->valid &&
-                inst->src_ip == conn_src->src_ip && inst->src_port == conn_src->src_port &&
-                inst->dst_ip == conn_src->dst_ip && inst->dst_port == conn_src->dst_port)
-            {
-              inst->valid = false;
-              break;
-            }
-          }
-
-          conn_src->valid = false; // Remove tracking entry
-          sddf_printf("TCP connection closed for (ip %s, port %u) -> (ip %s, port %u)\n",
-                      ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                      ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
-        }
+        //   conn_src->valid = false; // Remove tracking entry
+        //   sddf_printf("TCP connection closed for (ip %s, port %u) -> (ip %s, port %u)\n",
+        //               ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
+        //               ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
+        // }
 
         // SYN
-        if (syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
+        if (FILTER_ACT_CONNECT && syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
         {
           int open_syns = count_open_syns(ip_pkt->src_ip);
           if (open_syns >= MAX_OPEN_SYNS_PER_IP)
@@ -243,17 +274,6 @@ void filter(void)
             }
           }
         }
-        // SYN-ACK
-        else if (conn_dst && syn && ack && (conn_dst->state == TCP_STATE_SYN_SENT || conn_dst->state == TCP_STATE_SYN_ACK_RECEIVED))
-        {
-          // SYN-ACK response
-          conn_dst->state = TCP_STATE_SYN_ACK_RECEIVED;
-          conn_dst->last_ack_seq = ack_seq;
-
-          sddf_printf("TCP SYN-ACK seen: (%s:%u -> %s:%u) [State updated to SYN_ACK_RECEIVED]\n",
-                      ipaddr_to_string(conn_dst->dst_ip, ip_addr_buf0), conn_dst->dst_port,
-                      ipaddr_to_string(conn_dst->src_ip, ip_addr_buf1), conn_dst->src_port);
-        }
         // ACK
         else if (conn_src && ack && !syn && conn_src->state == TCP_STATE_SYN_ACK_RECEIVED)
         {
@@ -263,27 +283,36 @@ void filter(void)
                       ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port);
 
           // COURTNEY: You could confirm it's final by looking at the sequence number as well
-          conn_src->state = TCP_STATE_ESTABLISHED;
-          conn_src->valid = false;
-          // Now add instance
-          fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
-                                                          conn_src->dst_ip, conn_src->dst_port, false, rule_id);
-
-          if (fw_err == FILTER_ERR_OKAY || fw_err == FILTER_ERR_DUPLICATE)
+          if (FILTER_ACT_CONNECT)
           {
-            sddf_printf("%sTCP filter establishing connection via rule %u: (ip %s, port %u) -> (ip %s, port %u)\n",
-                        fw_frmt_str[filter_config.webserver.interface], rule_id,
-                        ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                        ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
-          }
+            conn_src->state = TCP_STATE_ESTABLISHED;
+            conn_src->valid = false;
+            // Now add instance
+            fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
+                                                            conn_src->dst_ip, conn_src->dst_port, false, rule_id);
 
-          if (fw_err == FILTER_ERR_FULL)
-          {
-            sddf_printf("%sTCP FILTER LOG: could not establish connection for rule %u: (ip %s, port %u) -> (ip %s, port %u): %s\n",
-                        fw_frmt_str[filter_config.webserver.interface],
-                        rule_id, ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                        ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port, fw_filter_err_str[fw_err]);
+            if (fw_err == FILTER_ERR_OKAY || fw_err == FILTER_ERR_DUPLICATE)
+            {
+              sddf_printf("%sTCP filter establishing connection via rule %u: (ip %s, port %u) -> (ip %s, port %u)\n",
+                          fw_frmt_str[filter_config.webserver.interface], rule_id,
+                          ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
+                          ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
+            }
+
+            if (fw_err == FILTER_ERR_FULL)
+            {
+              sddf_printf("%sTCP FILTER LOG: could not establish connection for rule %u: (ip %s, port %u) -> (ip %s, port %u): %s\n",
+                          fw_frmt_str[filter_config.webserver.interface],
+                          rule_id, ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
+                          ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port, fw_filter_err_str[fw_err]);
+            }
           }
+        } else {
+          sddf_printf("Attempted SYN retry or rogue ACK, dropping packet!\n");
+          err = net_enqueue_free(&rx_queue, buffer);
+          assert(!err);
+          returned = true;
+          continue;
         }
       }
 

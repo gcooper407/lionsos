@@ -252,7 +252,27 @@ static fw_action_t fw_filter_find_action(fw_filter_state_t *state,
                                          uint16_t dst_port,
                                          uint8_t *rule_id)
 {
-    /* We give priority to instances */
+    /* We give priority to internal instances */
+    for (uint16_t i = 0; i < state->instances_capacity; i++) {
+        fw_instance_t *instance = state->internal_instances + i;
+
+        if (!instance->valid) {
+            continue;
+        }
+
+        if (instance->src_port != src_port || instance->dst_port != dst_port) {
+            continue;
+        }
+
+        if (instance->src_ip != src_ip || instance->dst_ip != dst_ip) {
+            continue;
+        }
+
+        *rule_id = instance->rule_id;
+        return FILTER_ACT_ESTABLISHED;
+    }
+
+    /* Then external instances */
     for (uint16_t i = 0; i < state->instances_capacity; i++) {
         fw_instance_t *instance = state->external_instances + i;
 
@@ -270,7 +290,7 @@ static fw_action_t fw_filter_find_action(fw_filter_state_t *state,
 
         *rule_id = instance->rule_id;
         return FILTER_ACT_ESTABLISHED;
-    }
+    }    
 
     /* Check rules */
     fw_rule_t *match = NULL;
