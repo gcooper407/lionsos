@@ -220,10 +220,10 @@ static fw_filter_err_t fw_filter_add_instance(fw_filter_state_t *state,
 
         /* Connection has already been established */
         if (((instance->default_rule && default_rule) || (instance->rule_id == rule_id)) &&
-            instance->src_ip == src_ip &&
-            instance->src_port == src_port &&
-            instance->dst_ip == dst_ip &&
-            instance->dst_port == dst_port)
+            instance->src_ip ==  dst_ip &&
+            instance->src_port == dst_port &&
+            instance->dst_ip == src_ip &&
+            instance->dst_port == src_port)
         {
             return FILTER_ERR_DUPLICATE;
         }
@@ -255,16 +255,15 @@ static fw_action_t fw_filter_find_action(fw_filter_state_t *state,
     /* We give priority to internal instances */
     for (uint16_t i = 0; i < state->instances_capacity; i++) {
         fw_instance_t *instance = state->internal_instances + i;
-
         if (!instance->valid) {
             continue;
         }
 
-        if (instance->src_port != src_port || instance->dst_port != dst_port) {
+        if (instance->src_port != dst_port || instance->dst_port != src_port) {
             continue;
         }
 
-        if (instance->src_ip != src_ip || instance->dst_ip != dst_ip) {
+        if (instance->src_ip != dst_ip || instance->dst_ip != src_ip) {
             continue;
         }
 
@@ -290,7 +289,7 @@ static fw_action_t fw_filter_find_action(fw_filter_state_t *state,
 
         *rule_id = instance->rule_id;
         return FILTER_ACT_ESTABLISHED;
-    }    
+    }
 
     /* Check rules */
     fw_rule_t *match = NULL;

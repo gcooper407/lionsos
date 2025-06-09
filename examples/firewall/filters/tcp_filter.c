@@ -168,7 +168,7 @@ void filter(void)
       }
 
       /* Add an established connection in shared memory for corresponding filter */
-      if (action == FILTER_ACT_CONNECT || action == FILTER_ACT_ESTABLISHED)
+      if (action == FILTER_ACT_CONNECT)
       {
         tcp_conn_state_t *conn_src = NULL;
         for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
@@ -226,7 +226,7 @@ void filter(void)
         // }
 
         // SYN
-        if (action == FILTER_ACT_CONNECT && syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
+        if (syn && !ack && (conn_src == NULL || (conn_src != NULL && conn_src->state == TCP_STATE_SYN_SENT)))
         {
           int open_syns = count_open_syns(ip_pkt->src_ip);
           if (open_syns >= MAX_OPEN_SYNS_PER_IP)
@@ -259,21 +259,24 @@ void filter(void)
           }
 
           // New SYN
-          for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
-          {
-            if (!tcp_conn_table_src[i].valid)
+          // Only create a new connection entry if it doesn't already exist
+          if (conn_src == NULL) {
+            for (int i = 0; i < tcp_config.tcp_conns_capacity; i++)
             {
-              tcp_conn_table_src[i].valid = true;
-              tcp_conn_table_src[i].src_ip = ip_pkt->src_ip;
-              tcp_conn_table_src[i].src_port = tcp_hdr->src_port;
-              tcp_conn_table_src[i].dst_ip = ip_pkt->dst_ip;
-              tcp_conn_table_src[i].dst_port = tcp_hdr->dst_port;
-              tcp_conn_table_src[i].state = TCP_STATE_SYN_SENT;
-              tcp_conn_table_src[i].last_seq = seq;
-              sddf_printf("TCP SYN seen: (%s:%u -> %s:%u) [Tracking initiated]\n",
-                          ipaddr_to_string(ip_pkt->src_ip, ip_addr_buf0), tcp_hdr->src_port,
-                          ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port);
-              break;
+              if (!tcp_conn_table_src[i].valid)
+              {
+                tcp_conn_table_src[i].valid = true;
+                tcp_conn_table_src[i].src_ip = ip_pkt->src_ip;
+                tcp_conn_table_src[i].src_port = tcp_hdr->src_port;
+                tcp_conn_table_src[i].dst_ip = ip_pkt->dst_ip;
+                tcp_conn_table_src[i].dst_port = tcp_hdr->dst_port;
+                tcp_conn_table_src[i].state = TCP_STATE_SYN_SENT;
+                tcp_conn_table_src[i].last_seq = seq;
+                sddf_printf("TCP SYN seen: (%s:%u -> %s:%u) [Tracking initiated]\n",
+                            ipaddr_to_string(ip_pkt->src_ip, ip_addr_buf0), tcp_hdr->src_port,
+                            ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port);
+                break;
+              }
             }
           }
         }
@@ -286,29 +289,26 @@ void filter(void)
                       ipaddr_to_string(ip_pkt->dst_ip, ip_addr_buf1), tcp_hdr->dst_port);
 
           // COURTNEY: You could confirm it's final by looking at the sequence number as well
-          if (FILTER_ACT_CONNECT)
+          conn_src->state = TCP_STATE_ESTABLISHED;
+          conn_src->valid = false;
+          // Now add instance
+          fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
+                                                          conn_src->dst_ip, conn_src->dst_port, default_action, rule_id);
+
+          if (fw_err == FILTER_ERR_OKAY || fw_err == FILTER_ERR_DUPLICATE)
           {
-            conn_src->state = TCP_STATE_ESTABLISHED;
-            conn_src->valid = false;
-            // Now add instance
-            fw_filter_err_t fw_err = fw_filter_add_instance(&filter_state, conn_src->src_ip, conn_src->src_port,
-                                                            conn_src->dst_ip, conn_src->dst_port, false, rule_id);
+            sddf_printf("%sTCP filter establishing connection via rule %u: (ip %s, port %u) -> (ip %s, port %u)\n",
+                        fw_frmt_str[filter_config.webserver.interface], rule_id,
+                        ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
+                        ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
+          }
 
-            if (fw_err == FILTER_ERR_OKAY || fw_err == FILTER_ERR_DUPLICATE)
-            {
-              sddf_printf("%sTCP filter establishing connection via rule %u: (ip %s, port %u) -> (ip %s, port %u)\n",
-                          fw_frmt_str[filter_config.webserver.interface], rule_id,
-                          ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                          ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port);
-            }
-
-            if (fw_err == FILTER_ERR_FULL)
-            {
-              sddf_printf("%sTCP FILTER LOG: could not establish connection for rule %u: (ip %s, port %u) -> (ip %s, port %u): %s\n",
-                          fw_frmt_str[filter_config.webserver.interface],
-                          rule_id, ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
-                          ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port, fw_filter_err_str[fw_err]);
-            }
+          if (fw_err == FILTER_ERR_FULL)
+          {
+            sddf_printf("%sTCP FILTER LOG: could not establish connection for rule %u: (ip %s, port %u) -> (ip %s, port %u): %s\n",
+                        fw_frmt_str[filter_config.webserver.interface],
+                        rule_id, ipaddr_to_string(conn_src->src_ip, ip_addr_buf0), conn_src->src_port,
+                        ipaddr_to_string(conn_src->dst_ip, ip_addr_buf1), conn_src->dst_port, fw_filter_err_str[fw_err]);
           }
         }
         else
